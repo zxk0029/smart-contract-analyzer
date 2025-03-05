@@ -149,25 +149,13 @@ FACTORY_ABI = [
 # V3 Factory ABI
 FACTORY_V3_ABI = [
     {
-        "anonymous": False,
-        "inputs": [
-            {"indexed": True, "type": "address", "name": "token0"},
-            {"indexed": True, "type": "address", "name": "token1"},
-            {"indexed": True, "type": "uint24", "name": "fee"},
-            {"indexed": False, "type": "address", "name": "pool"},
-            {"indexed": False, "type": "uint256", "name": ""}
-        ],
-        "name": "PoolCreated",
-        "type": "event"
-    },
-    {
         "inputs": [
             {"internalType": "address", "name": "tokenA", "type": "address"},
             {"internalType": "address", "name": "tokenB", "type": "address"},
             {"internalType": "uint24", "name": "fee", "type": "uint24"}
         ],
         "name": "getPool",
-        "outputs": [{"internalType": "address", "name": "pool", "type": "address"}],
+        "outputs": [{"internalType": "address", "name": "", "type": "address"}],
         "stateMutability": "view",
         "type": "function"
     }

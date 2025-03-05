@@ -7,6 +7,16 @@ from web3 import Web3
 from ..config import Config
 from ..utils.logger import logger
 from ..utils.retry import async_retry
+from ..config.constants import (
+    DEX_CONFIGS,
+    EVENT_SIGNATURES,
+    FACTORY_ABI,
+    FACTORY_V3_ABI,
+    PAIR_ABI,
+    POOL_V3_ABI,
+    TOKEN_ABI,
+    CHAINS
+)
 
 
 class EventHandler:
@@ -329,6 +339,7 @@ class EventHandler:
         except Exception as e:
             logger.error(f"检查所有权状态失败: {e}")
             raise
+
     async def quick_check_contract(self) -> Dict:
         """快速检查合约状态"""
         try:
@@ -342,95 +353,102 @@ class EventHandler:
             }
 
             # 2. 检查各个DEX的池子
-            dex_factories = {
-                'PancakeSwap V2': {
-                    'factory': '0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73',
-                    'router': '0x10ED43C718714eb63d5aA57B78B54704E256024E',
-                    'wbnb': '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c'
-                },
-                'BiSwap': {
-                    'factory': '0x858E3312ed3A876947EA49d572A7C42DE08af7EE',
-                    'router': '0x3a6d8cA21D1CF76F653A67577FA0D27453350dD8',
-                    'wbnb': '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c'
-                },
-                'ApeSwap': {
-                    'factory': '0x0841BD0B734E4F5853f0dD8d7Ea041c241fb0Da6',
-                    'router': '0xcF0feBd3f17CEf5b47b0cD257aCf6025c5BFf3b7',
-                    'wbnb': '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c'
-                },
-                'BabySwap': {
-                    'factory': '0x86407bEa2078ea5f5EB5A52B2caA963bC1F889Da',
-                    'router': '0x325E343f1dE602396E256B67eFd1F61C3A6B38Bd',
-                    'wbnb': '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c'
-                }
-            }
-
-            factory_abi = [
-                {
-                    "constant": True,
-                    "inputs": [
-                        {"internalType": "address", "name": "tokenA", "type": "address"},
-                        {"internalType": "address", "name": "tokenB", "type": "address"}
-                    ],
-                    "name": "getPair",
-                    "outputs": [{"internalType": "address", "name": "pair", "type": "address"}],
-                    "payable": False,
-                    "stateMutability": "view",
-                    "type": "function"
-                }
-            ]
-
-            pair_abi = [
-                {"constant": True, "inputs": [], "name": "token0",
-                 "outputs": [{"internalType": "address", "name": "", "type": "address"}], "payable": False,
-                 "stateMutability": "view", "type": "function"},
-                {"constant": True, "inputs": [], "name": "token1",
-                 "outputs": [{"internalType": "address", "name": "", "type": "address"}], "payable": False,
-                 "stateMutability": "view", "type": "function"},
-                {"constant": True, "inputs": [], "name": "getReserves",
-                 "outputs": [{"internalType": "uint112", "name": "_reserve0", "type": "uint112"},
-                             {"internalType": "uint112", "name": "_reserve1", "type": "uint112"},
-                             {"internalType": "uint32", "name": "_blockTimestampLast", "type": "uint32"}],
-                 "payable": False, "stateMutability": "view", "type": "function"}
-            ]
-
             results['liquidity'] = []
 
+            # 获取当前链的 DEX 配置
+            current_chain_id = self.web3.eth.chain_id
+            chain_key = next((k for k, v in CHAINS.items() if v['chain_id'] == current_chain_id), None)
+            if not chain_key or chain_key not in DEX_CONFIGS:
+                logger.warning(f"未找到链 {chain_key} 的 DEX 配置")
+                return results
+
+            dexes = DEX_CONFIGS[chain_key]
+            wrapped_native = CHAINS[chain_key]['wrapped_native']
+
             # 检查每个DEX
-            for dex_name, dex_info in dex_factories.items():
-                factory = self.web3.eth.contract(
-                    address=Web3.to_checksum_address(dex_info['factory']),
-                    abi=factory_abi
-                )
+            for dex_id, dex_info in dexes.items():
+                try:
+                    if dex_info['version'] == 2:
+                        # 检查 V2 版本
+                        factory = self.web3.eth.contract(
+                            address=Web3.to_checksum_address(dex_info['factory']),
+                            abi=FACTORY_ABI
+                        )
 
-                pair_address = factory.functions.getPair(
-                    self.config.contract_address,
-                    dex_info['wbnb']
-                ).call()
+                        pair_address = factory.functions.getPair(
+                            self.config.contract_address,
+                            wrapped_native
+                        ).call()
 
-                if pair_address != '0x0000000000000000000000000000000000000000':
-                    pair_info = {
-                        'dex': dex_name,
-                        'pair_address': pair_address,
-                        'router': dex_info['router']
-                    }
+                        if pair_address != '0x0000000000000000000000000000000000000000':
+                            pair_info = {
+                                'dex': dex_info['name'],
+                                'version': 'V2',
+                                'pair_address': pair_address,
+                                'router': dex_info['router']
+                            }
 
-                    # 获取池子信息
-                    pair_contract = self.web3.eth.contract(
-                        address=pair_address,
-                        abi=pair_abi
-                    )
-                    reserves = pair_contract.functions.getReserves().call()
+                            # 获取池子信息
+                            pair_contract = self.web3.eth.contract(
+                                address=pair_address,
+                                abi=PAIR_ABI
+                            )
+                            reserves = pair_contract.functions.getReserves().call()
 
-                    # 确定代币位置
-                    is_token0 = pair_contract.functions.token0().call().lower() == self.config.contract_address.lower()
+                            # 确定代币位置
+                            is_token0 = pair_contract.functions.token0().call().lower() == self.config.contract_address.lower()
 
-                    pair_info['reserves'] = {
-                        'token': reserves[0] if is_token0 else reserves[1],
-                        'bnb': reserves[1] if is_token0 else reserves[0]
-                    }
+                            pair_info['reserves'] = {
+                                'token': reserves[0] if is_token0 else reserves[1],
+                                'bnb': reserves[1] if is_token0 else reserves[0]
+                            }
 
-                    results['liquidity'].append(pair_info)
+                            results['liquidity'].append(pair_info)
+
+                    elif dex_info['version'] == 3:
+                        # 检查 V3 版本
+                        factory = self.web3.eth.contract(
+                            address=Web3.to_checksum_address(dex_info['factory']),
+                            abi=FACTORY_V3_ABI
+                        )
+
+                        # V3 支持多个费率
+                        fee_tiers = [100, 500, 3000, 10000]  # 0.01%, 0.05%, 0.3%, 1%
+                        for fee in fee_tiers:
+                            pool_address = factory.functions.getPool(
+                                self.config.contract_address,
+                                wrapped_native,
+                                fee
+                            ).call()
+
+                            if pool_address != '0x0000000000000000000000000000000000000000':
+                                pool_info = {
+                                    'dex': dex_info['name'],
+                                    'version': 'V3',
+                                    'pool_address': pool_address,
+                                    'router': dex_info['router'],
+                                    'fee_tier': fee
+                                }
+
+                                # 获取池子信息
+                                pool_contract = self.web3.eth.contract(
+                                    address=pool_address,
+                                    abi=POOL_V3_ABI
+                                )
+                                
+                                # 获取流动性
+                                liquidity = pool_contract.functions.liquidity().call()
+                                slot0 = pool_contract.functions.slot0().call()
+                                
+                                pool_info['liquidity'] = liquidity
+                                pool_info['sqrt_price_x96'] = slot0[0]
+                                pool_info['tick'] = slot0[1]
+
+                                results['liquidity'].append(pool_info)
+
+                except Exception as e:
+                    logger.warning(f"检查 {dex_info['name']} 时出错: {str(e)}")
+                    continue
 
             return results
 
